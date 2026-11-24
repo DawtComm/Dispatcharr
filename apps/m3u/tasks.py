@@ -1859,12 +1859,7 @@ def refresh_m3u_groups(account_id, use_cache=False, full_refresh=False, scan_sta
 
                     # Queue async profile refresh task to run in background
                     # This prevents any delay in the main refresh process
-                    try:
-                        logger.info(f"Queueing background profile refresh for account {account.name}")
-                        refresh_account_profiles.delay(account.id)
-                    except Exception as e:
-                        logger.warning(f"Failed to queue profile refresh task: {str(e)}")
-                        # Don't fail the main refresh if profile refresh can't be queued
+                    _queue_profile_refresh_with_group_refresh(account)
 
                     # Get categories with detailed error handling
                     try:
@@ -3288,6 +3283,93 @@ def sync_auto_channels(account_id, scan_start_time=None):
         }
 
 
+PROFILE_REFRESH_AFTER_SYNC_KEY = "refresh_profiles_after_sync"
+
+
+def _profile_refresh_after_sync_enabled(account):
+    """True when the account runs its profile logins after the live/VOD refresh."""
+    props = ensure_custom_properties_dict(account.custom_properties)
+    return bool(props.get(PROFILE_REFRESH_AFTER_SYNC_KEY, False))
+
+
+def _queue_profile_refresh_with_group_refresh(account):
+    """Queue the per-profile logins alongside the group refresh (the default).
+
+    Skipped for accounts that opted to refresh profiles after the sync; those
+    are queued by ``refresh_single_m3u_account`` or by the VOD refresh instead.
+    """
+    if _profile_refresh_after_sync_enabled(account):
+        logger.info(
+            f"Profile refresh for account {account.name} is deferred until after the sync"
+        )
+        return
+    try:
+        logger.info(f"Queueing background profile refresh for account {account.name}")
+        refresh_account_profiles.delay(account.id)
+    except Exception as e:
+        logger.warning(f"Failed to queue profile refresh task: {str(e)}")
+        # Don't fail the main refresh if profile refresh can't be queued
+
+
+def _profile_settle_delay():
+    """Seconds the post-sync profile logins wait after the last provider call.
+
+    Reuses the spacing between profile logins (XC_PROFILE_REFRESH_DELAY), so the
+    first login is spaced from the sync's last request the same way the logins
+    are spaced from each other.
+    """
+    from django.conf import settings
+
+    return float(getattr(settings, 'XC_PROFILE_REFRESH_DELAY', 2.5))
+
+
+def _queue_vod_refresh(account_id, chain_profiles=False):
+    """Queue the VOD refresh. Returns True if the profile refresh was attached to it.
+
+    With ``chain_profiles`` the profile refresh is attached as both the success
+    and the error callback, so it runs once the VOD refresh has finished or
+    failed.
+    """
+    try:
+        from apps.vod.tasks import refresh_vod_content
+
+        if chain_profiles:
+            profiles = refresh_account_profiles.si(account_id).set(
+                countdown=_profile_settle_delay()
+            )
+            refresh_vod_content.apply_async(
+                args=(account_id,), link=profiles, link_error=profiles
+            )
+            logger.info(
+                f"VOD refresh task queued for account {account_id}; "
+                "profile refresh will follow it"
+            )
+            return True
+        refresh_vod_content.delay(account_id)
+        logger.info(f"VOD refresh task queued for account {account_id}")
+    except Exception as e:
+        logger.error(f"Failed to queue VOD refresh for account {account_id}: {str(e)}")
+    return False
+
+
+def _queue_profile_refresh_after_sync(account_id):
+    """Queue the profile refresh for an account that opted into running it after the sync."""
+    try:
+        account = M3UAccount.objects.filter(id=account_id, is_active=True).first()
+        if (
+            account is None
+            or account.account_type != M3UAccount.Types.XC
+            or not _profile_refresh_after_sync_enabled(account)
+        ):
+            return
+        logger.info(f"Queueing profile refresh for account {account.name} after the sync")
+        refresh_account_profiles.apply_async(
+            args=(account_id,), countdown=_profile_settle_delay()
+        )
+    except Exception as e:
+        logger.warning(f"Failed to queue post-sync profile refresh for account {account_id}: {str(e)}")
+
+
 @shared_task
 def refresh_account_profiles(account_id):
     """Refresh account information for all active profiles of an XC account.
@@ -3529,8 +3611,9 @@ def refresh_single_m3u_account(account_id):
 
     _release_task_db_connection()
 
+    post_sync = {}
     try:
-        return _refresh_single_m3u_account_impl(account_id)
+        return _refresh_single_m3u_account_impl(account_id, post_sync)
     except Exception as e:
         logger.error(
             f"refresh_single_m3u_account failed for account {account_id}: {e}",
@@ -3555,13 +3638,22 @@ def refresh_single_m3u_account(account_id):
         )
     finally:
         _ensure_m3u_refresh_terminal_status(account_id)
+        if not post_sync.get("profiles_chained"):
+            # No VOD refresh to wait for (or it could not be queued, or the
+            # refresh failed): run the opted-in profile refresh now.
+            _queue_profile_refresh_after_sync(account_id)
         _release_task_db_connection()
         lock_renewer.stop()
         release_task_lock("refresh_single_m3u_account", account_id)
 
 
-def _refresh_single_m3u_account_impl(account_id):
-    """Implementation of M3U account refresh with guaranteed memory cleanup."""
+def _refresh_single_m3u_account_impl(account_id, post_sync=None):
+    """Implementation of M3U account refresh with guaranteed memory cleanup.
+
+    ``post_sync`` is an optional dict the caller can inspect afterwards. The
+    key ``profiles_chained`` is set when the VOD refresh was queued with the
+    profile refresh attached, so the caller must not queue it a second time.
+    """
     # Record start time
     refresh_start_timestamp = timezone.now()  # For the cleanup function
     start_time = time.time()  # For tracking elapsed time as float
@@ -4073,12 +4165,11 @@ def _refresh_single_m3u_account_impl(account_id):
         # Trigger VOD refresh if enabled and account is XtreamCodes type
         if vod_enabled and account.account_type == M3UAccount.Types.XC:
             logger.info(f"VOD is enabled for account {account_id}, triggering VOD refresh")
-            try:
-                from apps.vod.tasks import refresh_vod_content
-                refresh_vod_content.delay(account_id)
-                logger.info(f"VOD refresh task queued for account {account_id}")
-            except Exception as e:
-                logger.error(f"Failed to queue VOD refresh for account {account_id}: {str(e)}")
+            profiles_after_vod = _profile_refresh_after_sync_enabled(account)
+            if _queue_vod_refresh(account_id, chain_profiles=profiles_after_vod):
+                # The VOD task now queues the profile refresh when it finishes.
+                if post_sync is not None:
+                    post_sync["profiles_chained"] = True
 
     except Exception as e:
         logger.error(f"Error processing M3U for account {account_id}: {str(e)}")

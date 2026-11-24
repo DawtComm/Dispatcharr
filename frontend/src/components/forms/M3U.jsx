@@ -97,6 +97,7 @@ const M3U = ({
       stale_stream_days: 7,
       priority: 0,
       enable_vod: false,
+      refresh_profiles_after_sync: false,
       hash_key: [],
     },
 
@@ -133,6 +134,8 @@ const M3U = ({
             ? m3uAccount.priority
             : 0,
         enable_vod: m3uAccount.enable_vod || false,
+        refresh_profiles_after_sync:
+          m3uAccount.refresh_profiles_after_sync || false,
         hash_key: m3uAccount.hash_key
           ? m3uAccount.hash_key.split(',').filter(Boolean)
           : [],
@@ -480,6 +483,19 @@ const M3U = ({
                       description="Scan and import VOD content (movies/series) from this Xtream account"
                       key={form.key('enable_vod')}
                       {...form.getInputProps('enable_vod', {
+                        type: 'checkbox',
+                      })}
+                    />
+                  </Group>
+
+                  <Group justify="space-between">
+                    <Box>Refresh Profiles After Sync</Box>
+                    <Switch
+                      id="refresh_profiles_after_sync"
+                      name="refresh_profiles_after_sync"
+                      description="Update each profile's account info (expiry, connections) only after the live and VOD refreshes finish, instead of at the same time. Helps providers that block bursts of logins."
+                      key={form.key('refresh_profiles_after_sync')}
+                      {...form.getInputProps('refresh_profiles_after_sync', {
                         type: 'checkbox',
                       })}
                     />
