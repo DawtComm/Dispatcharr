@@ -11,7 +11,7 @@ refresh has finished or failed.
 """
 from unittest.mock import MagicMock, patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from apps.m3u import tasks
 from apps.m3u.models import M3UAccount
@@ -74,17 +74,21 @@ class VodQueueTests(TestCase):
         vod_task.apply_async.assert_not_called()
         self.assertFalse(chained)
 
+    @override_settings(XC_PROFILE_REFRESH_DELAY=7)
     @patch("apps.m3u.tasks.refresh_account_profiles")
     @patch("apps.vod.tasks.refresh_vod_content")
     def test_chain_runs_profiles_on_success_and_on_error(self, vod_task, profiles_task):
-        sentinel = MagicMock(name="profiles_signature")
-        profiles_task.si.return_value = sentinel
+        delayed = MagicMock(name="profiles_signature_with_countdown")
+        profiles_task.si.return_value.set.return_value = delayed
 
         chained = tasks._queue_vod_refresh(42, chain_profiles=True)
 
         profiles_task.si.assert_called_with(42)
+        # The profile logins wait one profile-spacing after the VOD task ends,
+        # so they never start right on the heels of its last provider call.
+        profiles_task.si.return_value.set.assert_called_once_with(countdown=7.0)
         vod_task.apply_async.assert_called_once_with(
-            args=(42,), link=sentinel, link_error=sentinel
+            args=(42,), link=delayed, link_error=delayed
         )
         vod_task.delay.assert_not_called()
         self.assertTrue(chained)
@@ -110,11 +114,15 @@ class WrapperQueuesProfilesTests(TestCase):
         with patch("apps.m3u.tasks._refresh_single_m3u_account_impl", side_effect=impl):
             tasks.refresh_single_m3u_account(account.id)
 
+    @override_settings(XC_PROFILE_REFRESH_DELAY=7)
     def test_queued_after_a_refresh_with_no_vod_chain(self, profiles_task, *_mocks):
         account = make_account(flag=True)
         self.run_wrapper(account, lambda account_id, post_sync=None: "ok")
-        profiles_task.delay.assert_called_once_with(account.id)
+        profiles_task.apply_async.assert_called_once_with(
+            args=(account.id,), countdown=7.0
+        )
 
+    @override_settings(XC_PROFILE_REFRESH_DELAY=7)
     def test_queued_even_when_the_refresh_fails(self, profiles_task, *_mocks):
         account = make_account(flag=True)
 
@@ -122,7 +130,9 @@ class WrapperQueuesProfilesTests(TestCase):
             raise RuntimeError("provider unreachable")
 
         self.run_wrapper(account, boom)
-        profiles_task.delay.assert_called_once_with(account.id)
+        profiles_task.apply_async.assert_called_once_with(
+            args=(account.id,), countdown=7.0
+        )
 
     def test_not_queued_again_when_vod_already_chained_it(self, profiles_task, *_mocks):
         account = make_account(flag=True)
@@ -133,16 +143,19 @@ class WrapperQueuesProfilesTests(TestCase):
 
         self.run_wrapper(account, chained)
         profiles_task.delay.assert_not_called()
+        profiles_task.apply_async.assert_not_called()
 
     def test_not_queued_when_flag_off(self, profiles_task, *_mocks):
         account = make_account()
         self.run_wrapper(account, lambda account_id, post_sync=None: "ok")
         profiles_task.delay.assert_not_called()
+        profiles_task.apply_async.assert_not_called()
 
     def test_not_queued_for_non_xc_accounts(self, profiles_task, *_mocks):
         account = make_account(flag=True, account_type=M3UAccount.Types.STADNARD)
         self.run_wrapper(account, lambda account_id, post_sync=None: "ok")
         profiles_task.delay.assert_not_called()
+        profiles_task.apply_async.assert_not_called()
 
 
 class SerializerTests(TestCase):

@@ -3311,6 +3311,18 @@ def _queue_profile_refresh_with_group_refresh(account):
         # Don't fail the main refresh if profile refresh can't be queued
 
 
+def _profile_settle_delay():
+    """Seconds the post-sync profile logins wait after the last provider call.
+
+    Reuses the spacing between profile logins (XC_PROFILE_REFRESH_DELAY), so the
+    first login is spaced from the sync's last request the same way the logins
+    are spaced from each other.
+    """
+    from django.conf import settings
+
+    return float(getattr(settings, 'XC_PROFILE_REFRESH_DELAY', 2.5))
+
+
 def _queue_vod_refresh(account_id, chain_profiles=False):
     """Queue the VOD refresh. Returns True if the profile refresh was attached to it.
 
@@ -3322,7 +3334,9 @@ def _queue_vod_refresh(account_id, chain_profiles=False):
         from apps.vod.tasks import refresh_vod_content
 
         if chain_profiles:
-            profiles = refresh_account_profiles.si(account_id)
+            profiles = refresh_account_profiles.si(account_id).set(
+                countdown=_profile_settle_delay()
+            )
             refresh_vod_content.apply_async(
                 args=(account_id,), link=profiles, link_error=profiles
             )
@@ -3349,7 +3363,9 @@ def _queue_profile_refresh_after_sync(account_id):
         ):
             return
         logger.info(f"Queueing profile refresh for account {account.name} after the sync")
-        refresh_account_profiles.delay(account_id)
+        refresh_account_profiles.apply_async(
+            args=(account_id,), countdown=_profile_settle_delay()
+        )
     except Exception as e:
         logger.warning(f"Failed to queue post-sync profile refresh for account {account_id}: {str(e)}")
 
