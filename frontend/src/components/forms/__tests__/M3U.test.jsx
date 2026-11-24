@@ -901,4 +901,73 @@ describe('M3U', () => {
       // addEPG may be called conditionally — assert it was called or not based on a checkbox
     });
   });
+  // ── Refresh profiles after sync ────────────────────────────────────────────
+
+  describe('refresh profiles after sync', () => {
+    const fillRequiredFields = () => {
+      fireEvent.change(screen.getByTestId('text-input-name'), {
+        target: { value: 'New Playlist' },
+      });
+      fireEvent.change(screen.getByTestId('text-input-server_url'), {
+        target: { value: 'http://example.com/new.m3u' },
+      });
+    };
+
+    const sentValues = (mockFn) =>
+      mockFn.mock.calls[0].find(
+        (arg) =>
+          arg && typeof arg === 'object' && 'refresh_profiles_after_sync' in arg
+      );
+
+    it('shows the toggle for Xtream Codes accounts', () => {
+      setupStores();
+      render(<M3U {...defaultProps({ m3uAccount: makeM3uAccount() })} />);
+      expect(
+        screen.getByText('Refresh Profiles After Sync')
+      ).toBeInTheDocument();
+    });
+
+    it('sends false for a new account by default', async () => {
+      setupStores();
+      render(<M3U {...defaultProps()} />);
+      fillRequiredFields();
+      fireEvent.click(screen.getByRole('button', { name: /add|create|save/i }));
+      await waitFor(() => {
+        expect(M3uUtils.addPlaylist).toHaveBeenCalled();
+      });
+      expect(sentValues(M3uUtils.addPlaylist).refresh_profiles_after_sync).toBe(
+        false
+      );
+    });
+
+    it('treats an existing account without the field as off', async () => {
+      setupStores();
+      render(<M3U {...defaultProps({ m3uAccount: makeM3uAccount() })} />);
+      fireEvent.click(screen.getByRole('button', { name: /update|save/i }));
+      await waitFor(() => {
+        expect(M3uUtils.updatePlaylist).toHaveBeenCalled();
+      });
+      expect(
+        sentValues(M3uUtils.updatePlaylist).refresh_profiles_after_sync
+      ).toBe(false);
+    });
+
+    it('loads the stored value from an existing account and sends it on update', async () => {
+      setupStores();
+      render(
+        <M3U
+          {...defaultProps({
+            m3uAccount: makeM3uAccount({ refresh_profiles_after_sync: true }),
+          })}
+        />
+      );
+      fireEvent.click(screen.getByRole('button', { name: /update|save/i }));
+      await waitFor(() => {
+        expect(M3uUtils.updatePlaylist).toHaveBeenCalled();
+      });
+      expect(
+        sentValues(M3uUtils.updatePlaylist).refresh_profiles_after_sync
+      ).toBe(true);
+    });
+  });
 });

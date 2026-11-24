@@ -160,6 +160,7 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         validators=[validate_flexible_url],
     )
     enable_vod = serializers.BooleanField(required=False, write_only=True)
+    refresh_profiles_after_sync = serializers.BooleanField(required=False, write_only=True)
     auto_enable_new_groups_live = serializers.BooleanField(required=False, write_only=True)
     auto_enable_new_groups_vod = serializers.BooleanField(required=False, write_only=True)
     auto_enable_new_groups_series = serializers.BooleanField(required=False, write_only=True)
@@ -219,6 +220,7 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             "status",
             "last_message",
             "enable_vod",
+            "refresh_profiles_after_sync",
             "auto_enable_new_groups_live",
             "auto_enable_new_groups_vod",
             "auto_enable_new_groups_series",
@@ -271,6 +273,7 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         custom_props = instance.custom_properties or {}
 
         data["enable_vod"] = custom_props.get("enable_vod", False)
+        data["refresh_profiles_after_sync"] = custom_props.get("refresh_profiles_after_sync", False)
         data["auto_enable_new_groups_live"] = custom_props.get("auto_enable_new_groups_live", True)
         data["auto_enable_new_groups_vod"] = custom_props.get("auto_enable_new_groups_vod", True)
         data["auto_enable_new_groups_series"] = custom_props.get("auto_enable_new_groups_series", True)
@@ -317,6 +320,7 @@ class M3UAccountSerializer(serializers.ModelSerializer):
 
         # Handle enable_vod preference and auto_enable_new_groups settings
         enable_vod = validated_data.pop("enable_vod", None)
+        refresh_profiles_after_sync = validated_data.pop("refresh_profiles_after_sync", None)
         auto_enable_new_groups_live = validated_data.pop("auto_enable_new_groups_live", None)
         auto_enable_new_groups_vod = validated_data.pop("auto_enable_new_groups_vod", None)
         auto_enable_new_groups_series = validated_data.pop("auto_enable_new_groups_series", None)
@@ -344,6 +348,8 @@ class M3UAccountSerializer(serializers.ModelSerializer):
 
         if enable_vod is not None:
             custom_props["enable_vod"] = enable_vod
+        if refresh_profiles_after_sync is not None:
+            custom_props["refresh_profiles_after_sync"] = refresh_profiles_after_sync
         if auto_enable_new_groups_live is not None:
             custom_props["auto_enable_new_groups_live"] = auto_enable_new_groups_live
         if auto_enable_new_groups_vod is not None:
@@ -417,6 +423,7 @@ class M3UAccountSerializer(serializers.ModelSerializer):
 
         # Handle enable_vod preference and auto_enable_new_groups settings during creation
         enable_vod = validated_data.pop("enable_vod", False)
+        refresh_profiles_after_sync = validated_data.pop("refresh_profiles_after_sync", False)
         auto_enable_new_groups_live = validated_data.pop("auto_enable_new_groups_live", True)
         auto_enable_new_groups_vod = validated_data.pop("auto_enable_new_groups_vod", True)
         auto_enable_new_groups_series = validated_data.pop("auto_enable_new_groups_series", True)
@@ -431,6 +438,7 @@ class M3UAccountSerializer(serializers.ModelSerializer):
 
         # Set preferences (default to True for auto_enable_new_groups)
         custom_props["enable_vod"] = enable_vod
+        custom_props["refresh_profiles_after_sync"] = refresh_profiles_after_sync
         custom_props["auto_enable_new_groups_live"] = auto_enable_new_groups_live
         custom_props["auto_enable_new_groups_vod"] = auto_enable_new_groups_vod
         custom_props["auto_enable_new_groups_series"] = auto_enable_new_groups_series
