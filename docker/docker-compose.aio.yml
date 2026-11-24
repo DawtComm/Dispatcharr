@@ -50,6 +50,10 @@ services:
       #- CELERY_MAX_WORKERS=6  # Celery prefork autoscale max (default: 6)
       #- CELERY_MIN_WORKERS=1  # Celery prefork autoscale min (default: 1; must be <= max)
 
+      # Seconds to wait between per-profile Xtream Codes account-info logins after an
+      # account refresh (Optional, default: 2.5). Raise it if your provider throttles bursts.
+      #- XC_PROFILE_REFRESH_DELAY=2.5
+
       # Soft open-file limit for uwsgi/daphne/celery (Optional, default: 65536)
       #- DISPATCHARR_NOFILE=65536
     #
